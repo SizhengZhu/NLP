@@ -1,0 +1,745 @@
+---
+title: "Assignment 3 - NLP"
+author: "Charles Lang"
+date: "2/23/2017"
+output: html_document
+---
+
+## Libraries
+```{r}
+#Make sure you install and load the following libraries
+install.packages("tm")
+library(tm)
+library(SnowballC)
+install.packages("wordcloud")
+library(wordcloud)
+install.packages("ggplot2")
+library(ggplot2)
+install.packages("dplyr")
+library(dplyr)
+install.packages("tidyr")
+library(tidyr)
+install.packages("topicmodels")
+library(topicmodels)
+
+#IF USING A MAC PLEASE RUN THIS CODE
+Sys.setlocale("LC_ALL", "C")
+```
+
+## Import all document files and the list of weeks file
+```{r}
+#Create a list of all the files
+file.list <- list.files(path="~/test/natural-language-processing/class-notes", pattern=".csv", full.names = TRUE)
+#Loop over file list importing them and binding them together
+D1 <- do.call("rbind", lapply(file.list, read.csv, header = TRUE, stringsAsFactors = FALSE))
+
+D2 <- read.csv("~/test/natural-language-processing/week-list.csv", header = TRUE)
+```
+
+## Step 1 - Clean the htlm tags from your text
+```{r}
+D1$Notes2 <- gsub("<.*?>", "", D1$Notes)
+D1$Notes2 <- gsub("nbsp", "" , D1$Notes2)
+D1$Notes2 <- gsub("nbspnbspnbsp", "" , D1$Notes2)
+```
+
+## Step 2 - Process text using the tm package
+```{r}
+#Convert the data frame to the corpus format that the tm package uses
+corpus <- Corpus(VectorSource(D1$Notes2))
+#Remove spaces
+corpus <- tm_map(corpus, stripWhitespace)
+#Convert to lower case
+corpus <- tm_map(corpus, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus <- tm_map(corpus, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus <- tm_map(corpus, stemDocument)
+#Remove numbers
+corpus <- tm_map(corpus, removeNumbers)
+#remove punctuation
+corpus <- tm_map(corpus, removePunctuation)
+
+#Convert to plain text for mapping by wordcloud package
+#delete this line
+#corpus <- tm_map(corpus, PlainTextDocument, lazy = TRUE)
+
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus <- TermDocumentMatrix(corpus)
+
+#Note: we won't remove plural words here, plural words in English tend to be highly irregular and difficult to extract reliably
+```
+
+## Alternative processing - Code has been altered to account for changes in the tm package
+```{r}
+#Convert the data frame to the corpus format that the tm package uses
+corpus <- Corpus(VectorSource(D1$Notes2))
+#Remove spaces
+corpus <- tm_map(corpus, stripWhitespace)
+#Convert to lower case
+corpus <- tm_map(corpus, content_transformer(tolower)) 
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus <- tm_map(corpus, removeWords, stopwords('english'))
+
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+#corpus <- tm_map(corpus, stemDocument, lazy=TRUE)
+
+#Remove numbers
+corpus <- tm_map(corpus, removeNumbers, lazy=TRUE)
+#remove punctuation
+corpus <- tm_map(corpus, removePunctuation, lazy=TRUE)
+```
+
+What processing steps have you conducted here? Why is this important? Are there any other steps you should take to process your text before analyzing?
+
+I remove the space, pre-defined stop words, numbers and punctuation that are not useful in NLP. And we convert everything to lower case. It is a very important step because it remove the unstructured data and keep the structured data for NLP. 
+
+
+
+
+## Step 3 - Find common words
+```{r}
+#The tm package can do some simple analysis, like find the most common words
+findFreqTerms(tdm.corpus, lowfreq=50, highfreq=Inf)
+#We can also create a vector of the word frequencies
+word.count <- sort(rowSums(as.matrix(tdm.corpus)), decreasing=TRUE)
+word.count <- data.frame(word.count)
+```
+
+## Generate a Word Cloud
+
+### ColorBrewer
+ColorBrewer is a useful tool to help you choose colors for visualizations that was originally built for cartographers. On the ColorBrewer website (http://colorbrewer2.org/#) you can test different color schemes or see what their preset color schemes look like. This is very useful, especially if you are making images for colorblind individuals. 
+```{r}
+#Define the colors the cloud will use
+col=brewer.pal(6,"Dark2")
+#Generate cloud
+wordcloud(corpus, min.freq=80, scale=c(5,2),rot.per = 0.25,
+          random.color=T, max.word=45, random.order=F,colors=col)
+```
+
+## Merge with week list so you have a variable representing weeks for each entry 
+```{r}
+D2$Title<-as.character(D2$Title)
+D3 <- left_join(D1, D2, by = "Title")
+D3 <- select(D3, "Title", "week", "Notes", "Notes2")
+D3 <- D3[!is.na(D3$week),]
+
+```
+
+### Create a Term Document Matrix
+```{r}
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus2 <- Corpus(VectorSource(D3$Notes2))
+#Remove spaces
+corpus2 <- tm_map(corpus2, stripWhitespace)
+#Convert to lower case
+corpus2 <- tm_map(corpus2, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus2 <- tm_map(corpus2, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus2 <- tm_map(corpus2, stemDocument)
+#Remove numbers
+corpus2 <- tm_map(corpus2, removeNumbers)
+#remove punctuation
+corpus2 <- tm_map(corpus2, removePunctuation)
+
+#Convert to plain text for mapping by wordcloud package
+#delete this line
+#corpus <- tm_map(corpus, PlainTextDocument, lazy = TRUE)
+
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus2 <- TermDocumentMatrix(corpus2)
+
+
+```
+
+# Sentiment Analysis
+
+### Match words in corpus to lexicons of positive & negative words
+```{r}
+#Upload positive and negative word lexicons
+positive <- readLines("positive-words.txt")
+negative <- readLines("negative-words.txt")
+
+#Search for matches between each word and the two lexicons
+D3$positive <- tm_term_score(tdm.corpus2, positive)
+D3$negative <- tm_term_score(tdm.corpus2, negative)
+
+#Generate an overall pos-neg score for each line
+D3$score <- D3$positive - D3$negative
+
+```
+
+## Generate a visualization of the sum of the sentiment score over weeks
+```{r}
+
+ggplot(data = D3, aes(week, score))+
+      geom_bar(stat="identity")+
+      ggtitle("Sum of Sentiment Score over Weeks")
+
+
+```
+
+# LDA Topic Modelling
+
+Using the same csv file you have generated the LDA analysis will treat each row of the data frame as a document. Does this make sense for generating topics?
+
+I think it makes sense for generating topics. We can consider a single row as a document 
+
+In LDA, we need to devide the whole file into serval documents and then generate the topics. Treating each row (a note of student in one week) as a document is reasonable.
+
+
+
+```{r}
+#Term Frequency Inverse Document Frequency
+dtm.tfi <- DocumentTermMatrix(corpus, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi <- dtm.tfi[,dtm.tfi$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals <- apply(dtm.tfi , 1, sum) #Find the sum of words in each Document
+dtm.tfi   <- dtm.tfi[rowTotals> 0, ] #Divide by sum across rows
+
+lda.model = LDA(dtm.tfi, k = 3, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model)
+
+#Which documents belong to which topic
+topics(lda.model)
+
+```
+
+What does an LDA topic represent? 
+
+LDA represents the most frequent words (including related words) in the documents and considers them as topics.
+
+
+# Main Task 
+
+Your task is to generate a *single* visualization showing: 
+
+- Sentiment for each week and 
+- One important topic for that week
+```{r}
+W2<-subset(D3, week == 2)
+W3<-subset(D3, week == 3)
+W4<-subset(D3, week == 4)
+W5<-subset(D3, week == 5)
+W6<-subset(D3, week == 6)
+W7<-subset(D3, week == 7)
+W8<-subset(D3, week == 8)
+W9<-subset(D3, week == 9)
+W10<-subset(D3, week == 10)
+W11<-subset(D3, week == 11)
+W12<-subset(D3, week == 12)
+W13<-subset(D3, week == 13)
+W14<-subset(D3, week == 14)
+
+# Week 2
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w2 <- Corpus(VectorSource(W2$Notes2))
+#Remove spaces
+corpus_w2 <- tm_map(corpus_w2, stripWhitespace)
+#Convert to lower case
+corpus_w2 <- tm_map(corpus_w2, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w2 <- tm_map(corpus_w2, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w2 <- tm_map(corpus_w2, stemDocument)
+#Remove numbers
+corpus_w2 <- tm_map(corpus_w2, removeNumbers)
+#remove punctuation
+corpus_w2 <- tm_map(corpus_w2, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w2 <- TermDocumentMatrix(corpus_w2)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w2 <- DocumentTermMatrix(corpus_w2, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w2 <- dtm.tfi[,dtm.tfi_w2$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w2 <- apply(dtm.tfi_w2 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w2   <- dtm.tfi[rowTotals_w2> 0, ] #Divide by sum across rows
+
+lda.model_w2 = LDA(dtm.tfi_w2, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w2)
+
+#One important topic for week 2 is "data"
+
+# Week 3
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w3 <- Corpus(VectorSource(W3$Notes2))
+#Remove spaces
+corpus_w3 <- tm_map(corpus_w3, stripWhitespace)
+#Convert to lower case
+corpus_w3 <- tm_map(corpus_w3, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w3 <- tm_map(corpus_w3, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w3 <- tm_map(corpus_w3, stemDocument)
+#Remove numbers
+corpus_w3 <- tm_map(corpus_w3, removeNumbers)
+#remove punctuation
+corpus_w3 <- tm_map(corpus_w3, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w3 <- TermDocumentMatrix(corpus_w3)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w3 <- DocumentTermMatrix(corpus_w3, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w3 <- dtm.tfi[,dtm.tfi_w3$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w3 <- apply(dtm.tfi_w3, 1, sum) #Find the sum of words in each Document
+dtm.tfi_w3   <- dtm.tfi[rowTotals_w3> 0, ] #Divide by sum across rows
+
+lda.model_w3 = LDA(dtm.tfi_w3, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w3)
+
+#One important topic for week 3 is "network"
+
+#week 4
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w4 <- Corpus(VectorSource(W4$Notes2))
+#Remove spaces
+corpus_w4 <- tm_map(corpus_w4, stripWhitespace)
+#Convert to lower case
+corpus_w4 <- tm_map(corpus_w4, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w4 <- tm_map(corpus_w4, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w4 <- tm_map(corpus_w4, stemDocument)
+#Remove numbers
+corpus_w4 <- tm_map(corpus_w4, removeNumbers)
+#remove punctuation
+corpus_w4 <- tm_map(corpus_w4, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w4 <- TermDocumentMatrix(corpus_w4)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w4 <- DocumentTermMatrix(corpus_w4, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w4 <- dtm.tfi[,dtm.tfi_w4$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w4 <- apply(dtm.tfi_w4 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w4   <- dtm.tfi[rowTotals_w4> 0, ] #Divide by sum across rows
+
+lda.model_w4 = LDA(dtm.tfi_w4, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w4)
+
+#One representative topic for week 4 is "method"
+
+
+#week5
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w5 <- Corpus(VectorSource(W5$Notes2))
+#Remove spaces
+corpus_w5 <- tm_map(corpus_w5, stripWhitespace)
+#Convert to lower case
+corpus_w5 <- tm_map(corpus_w5, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w5 <- tm_map(corpus_w5, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w5 <- tm_map(corpus_w5, stemDocument)
+#Remove numbers
+corpus_w5 <- tm_map(corpus_w5, removeNumbers)
+#remove punctuation
+corpus_w5 <- tm_map(corpus_w5, removePunctuation)
+
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w5 <- DocumentTermMatrix(corpus_w5, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w5 <- dtm.tfi[,dtm.tfi_w5$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w5 <- apply(dtm.tfi_w5, 1, sum) #Find the sum of words in each Document
+dtm.tfi_w5  <- dtm.tfi[rowTotals_w5> 0, ] #Divide by sum across rows
+
+lda.model_w5 = LDA(dtm.tfi_w5, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w5)
+
+#One representative topic for week 5 is "clusters" 
+
+
+#week 6
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w6 <- Corpus(VectorSource(W6$Notes2))
+#Remove spaces
+corpus_w6 <- tm_map(corpus_w6, stripWhitespace)
+#Convert to lower case
+corpus_w6 <- tm_map(corpus_w6, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w6 <- tm_map(corpus_w6, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w6 <- tm_map(corpus_w6, stemDocument)
+#Remove numbers
+corpus_w6 <- tm_map(corpus_w6, removeNumbers)
+#remove punctuation
+corpus_w6 <- tm_map(corpus_w6, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w6 <- TermDocumentMatrix(corpus_w6)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w6 <- DocumentTermMatrix(corpus_w6, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w6 <- dtm.tfi[,dtm.tfi_w6$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w6 <- apply(dtm.tfi_w6 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w6   <- dtm.tfi[rowTotals_w6> 0, ] #Divide by sum across rows
+
+lda.model_w6 = LDA(dtm.tfi_w6, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w6)
+
+
+#One representative topic for week 6 is "clusters"
+
+
+# Week 7
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w7 <- Corpus(VectorSource(W7$Notes2))
+#Remove spaces
+corpus_w7 <- tm_map(corpus_w7, stripWhitespace)
+#Convert to lower case
+corpus_w7 <- tm_map(corpus_w7, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w7 <- tm_map(corpus_w7, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w7 <- tm_map(corpus_w7, stemDocument)
+#Remove numbers
+corpus_w7 <- tm_map(corpus_w7, removeNumbers)
+#remove punctuation
+corpus_w7 <- tm_map(corpus_w7, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w7 <- TermDocumentMatrix(corpus_w7)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w7 <- DocumentTermMatrix(corpus_w7, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w7 <- dtm.tfi[,dtm.tfi_w7$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w7 <- apply(dtm.tfi_w7, 1, sum) #Find the sum of words in each Document
+dtm.tfi_w7   <- dtm.tfi[rowTotals_w3> 0, ] #Divide by sum across rows
+
+lda.model_w7 = LDA(dtm.tfi_w7, k = 3, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w7)
+
+#Important topic: "students"
+
+#week 8
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w8 <- Corpus(VectorSource(W8$Notes2))
+#Remove spaces
+corpus_w8 <- tm_map(corpus_w8, stripWhitespace)
+#Convert to lower case
+corpus_w8 <- tm_map(corpus_w8, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w8 <- tm_map(corpus_w8, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w8 <- tm_map(corpus_w8, stemDocument)
+#Remove numbers
+corpus_w8 <- tm_map(corpus_w8, removeNumbers)
+#remove punctuation
+corpus_w8 <- tm_map(corpus_w8, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w8 <- TermDocumentMatrix(corpus_w8)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w8 <- DocumentTermMatrix(corpus_w8, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w8 <- dtm.tfi[,dtm.tfi_w8$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w8 <- apply(dtm.tfi_w8 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w8   <- dtm.tfi[rowTotals_w8> 0, ] #Divide by sum across rows
+
+lda.model_w8 = LDA(dtm.tfi_w8, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w8)
+
+
+#One representative topic for week 8 is "curve"
+
+#week 9
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w9 <- Corpus(VectorSource(W9$Notes2))
+#Remove spaces
+corpus_w9 <- tm_map(corpus_w9, stripWhitespace)
+#Convert to lower case
+corpus_w9 <- tm_map(corpus_w9, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w9 <- tm_map(corpus_w9, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w9 <- tm_map(corpus_w9, stemDocument)
+#Remove numbers
+corpus_w9 <- tm_map(corpus_w9, removeNumbers)
+#remove punctuation
+corpus_w9 <- tm_map(corpus_w9, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w9 <- TermDocumentMatrix(corpus_w9)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w9 <- DocumentTermMatrix(corpus_w9, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w9 <- dtm.tfi[,dtm.tfi_w9$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w9 <- apply(dtm.tfi_w9 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w9   <- dtm.tfi[rowTotals_w9> 0, ] #Divide by sum across rows
+
+lda.model_w9 = LDA(dtm.tfi_w9, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w9)
+
+
+#One representative topic for week 9 is "metrics"
+
+#week 10
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w10 <- Corpus(VectorSource(W10$Notes2))
+#Remove spaces
+corpus_w10 <- tm_map(corpus_w10, stripWhitespace)
+#Convert to lower case
+corpus_w10 <- tm_map(corpus_w10, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w10 <- tm_map(corpus_w10, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w10 <- tm_map(corpus_w10, stemDocument)
+#Remove numbers
+corpus_w10 <- tm_map(corpus_w10, removeNumbers)
+#remove punctuation
+corpus_w10 <- tm_map(corpus_w10, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w10 <- TermDocumentMatrix(corpus_w10)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w10 <- DocumentTermMatrix(corpus_w10, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w10 <- dtm.tfi[,dtm.tfi_w10$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w10 <- apply(dtm.tfi_w10 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w10   <- dtm.tfi[rowTotals_w10> 0, ] #Divide by sum across rows
+
+lda.model_w10 = LDA(dtm.tfi_w10, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w10)
+
+#One representative topic for week 10 is "skill"
+
+#week 11
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w11 <- Corpus(VectorSource(W11$Notes2))
+#Remove spaces
+corpus_w11 <- tm_map(corpus_w11, stripWhitespace)
+#Convert to lower case
+corpus_w11 <- tm_map(corpus_w11, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w11 <- tm_map(corpus_w11, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w11 <- tm_map(corpus_w11, stemDocument)
+#Remove numbers
+corpus_w11 <- tm_map(corpus_w11, removeNumbers)
+#remove punctuation
+corpus_w11 <- tm_map(corpus_w11, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w11 <- TermDocumentMatrix(corpus_w11)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w11 <- DocumentTermMatrix(corpus_w11, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w11 <- dtm.tfi[,dtm.tfi_w11$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w11 <- apply(dtm.tfi_w11 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w11   <- dtm.tfi[rowTotals_w11> 0, ] #Divide by sum across rows
+
+lda.model_w11 = LDA(dtm.tfi_w11, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w11)
+
+#One representative topic for week 11 is "learning"
+
+
+#week 12
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w12 <- Corpus(VectorSource(W12$Notes2))
+#Remove spaces
+corpus_w12 <- tm_map(corpus_w12, stripWhitespace)
+#Convert to lower case
+corpus_w12 <- tm_map(corpus_w12, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w12 <- tm_map(corpus_w12, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w12 <- tm_map(corpus_w12, stemDocument)
+#Remove numbers
+corpus_w12 <- tm_map(corpus_w12, removeNumbers)
+#remove punctuation
+corpus_w12 <- tm_map(corpus_w12, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w12 <- TermDocumentMatrix(corpus_w12)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w12 <- DocumentTermMatrix(corpus_w12, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w12 <- dtm.tfi[,dtm.tfi_w12$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w12 <- apply(dtm.tfi_w12 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w12   <- dtm.tfi[rowTotals_w12> 0, ] #Divide by sum across rows
+
+lda.model_w12 = LDA(dtm.tfi_w12, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w12)
+
+#One representative topic for week 12 is "skill"
+
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w13 <- Corpus(VectorSource(W13$Notes2))
+#Remove spaces
+corpus_w13 <- tm_map(corpus_w13, stripWhitespace)
+#Convert to lower case
+corpus_w13 <- tm_map(corpus_w13, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w13 <- tm_map(corpus_w13, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w13 <- tm_map(corpus_w13, stemDocument)
+#Remove numbers
+corpus_w13 <- tm_map(corpus_w13, removeNumbers)
+#remove punctuation
+corpus_w13 <- tm_map(corpus_w13, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w13 <- TermDocumentMatrix(corpus_w13)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w13 <- DocumentTermMatrix(corpus_w13, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w13 <- dtm.tfi[,dtm.tfi_w13$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w13 <- apply(dtm.tfi_w13 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w13   <- dtm.tfi[rowTotals_w13> 0, ] #Divide by sum across rows
+
+lda.model_w13 = LDA(dtm.tfi_w13, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w13)
+
+#One representative topic for week 13 is "graphics"
+
+
+#week14
+
+#Convert the data frame to the corpus format that the tm package uses
+corpus_w14 <- Corpus(VectorSource(W14$Notes2))
+#Remove spaces
+corpus_w14 <- tm_map(corpus_w14, stripWhitespace)
+#Convert to lower case
+corpus_w14 <- tm_map(corpus_w14, tolower)
+#Remove pre-defined stop words ('the', 'a', etc)
+corpus_w14 <- tm_map(corpus_w14, removeWords, stopwords('english'))
+#Convert words to stems ("education" = "edu") for analysis, for more info see  http://tartarus.org/~martin/PorterStemmer/
+corpus_w14 <- tm_map(corpus_w14, stemDocument)
+#Remove numbers
+corpus_w14 <- tm_map(corpus_w14, removeNumbers)
+#remove punctuation
+corpus_w14 <- tm_map(corpus_w14, removePunctuation)
+#Convert corpus to a term document matrix - so each word can be analyzed individuallly
+tdm.corpus_w14 <- TermDocumentMatrix(corpus_w14)
+
+#Term Frequency Inverse Document Frequency
+dtm.tfi_w14 <- DocumentTermMatrix(corpus_w14, control = list(weighting = weightTf))
+
+#Remove very uncommon terms (term freq inverse document freq < 0.1)
+dtm.tfi_w14 <- dtm.tfi[,dtm.tfi_w14$v >= 0.1]
+
+#Remove non-zero entries
+rowTotals_w14 <- apply(dtm.tfi_w14 , 1, sum) #Find the sum of words in each Document
+dtm.tfi_w14   <- dtm.tfi[rowTotals_w14> 0, ] #Divide by sum across rows
+
+lda.model_w14 = LDA(dtm.tfi_w14, k = 20, seed = 150)
+
+#Which terms are most common in each topic
+terms(lda.model_w14)
+
+#One representative topic for week 14 is "data"
+
+
+
+#visulization
+
+topic<-c("data","network","method", "clusters","clusters","students", "curve", "metrics", "skill","learning", "skill", "graphics", "data" )
+
+data_topic<-D3[,c(2,7)]
+
+colnames(data_topic)[colnames(data_topic)=="week"] <- "week_topic"
+
+data_topic$week[data_topic$week_topic == 2] <- "2 data"
+data_topic$week[data_topic$week_topic == 3] <- "3 network"
+data_topic$week[data_topic$week_topic == 4] <- "4 method"
+data_topic$week[data_topic$week_topic == 5] <- "5 clusters"
+data_topic$week[data_topic$week_topic == 6] <- "6 clusters"
+data_topic$week[data_topic$week_topic == 7] <- "7 students"
+data_topic$week[data_topic$week_topic == 8] <- "8 curve"
+data_topic$week[data_topic$week_topic == 9] <- "9 metrics"
+data_topic$week[data_topic$week_topic == 10] <- "10 skill"
+data_topic$week[data_topic$week_topic == 11] <- "11 learning"
+data_topic$week[data_topic$week_topic == 12] <- "12 skill"
+data_topic$week[data_topic$week_topic == 13] <- "13 graphics"
+data_topic$week[data_topic$week_topic == 14] <- "14 data"
+
+
+ggplot(data = data_topic, aes(x = week_topic, y = score))+
+      geom_bar(stat="identity")+
+      ggtitle("Sum of Sentiment Score over Weeks")
+
+
+
+
